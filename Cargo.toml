@@ -1,0 +1,23 @@
+[package]
+name = "gtasks"
+version = "0.1.0"
+edition = "2024"
+description = "A command-line interface for Google Tasks"
+license = "MIT"
+repository = "https://github.com/sode0417/google-tasks-cli"
+
+[dependencies]
+google-tasks1 = "7"
+yup-oauth2 = "12"
+hyper = "1"
+hyper-rustls = { version = "0.27", features = ["ring"] }
+rustls = { version = "0.23", features = ["ring"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "http2"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["full"] }
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+dirs = "6"
+anyhow = "1"
