@@ -1,7 +1,7 @@
 use crate::auth::TasksHub;
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
-use google_tasks1::api::Task;
+use google_tasks1::api::{Task, TaskList};
 
 /// タスクリスト一覧を表示
 pub async fn list_tasklists(hub: &TasksHub) -> Result<()> {
@@ -20,6 +20,38 @@ pub async fn list_tasklists(hub: &TasksHub) -> Result<()> {
             list.id.as_deref().unwrap_or("?")
         );
     }
+    Ok(())
+}
+
+/// タスクリストを作成
+pub async fn create_tasklist(hub: &TasksHub, title: &str) -> Result<()> {
+    let mut tasklist = TaskList::default();
+    tasklist.title = Some(title.to_string());
+
+    let (_, created) = hub
+        .tasklists()
+        .insert(tasklist)
+        .doit()
+        .await
+        .context("タスクリスト作成に失敗")?;
+
+    println!(
+        "タスクリストを作成しました: {} [id: {}]",
+        created.title.as_deref().unwrap_or("?"),
+        created.id.as_deref().unwrap_or("?")
+    );
+    Ok(())
+}
+
+/// タスクリストを削除
+pub async fn delete_tasklist(hub: &TasksHub, tasklist_id: &str) -> Result<()> {
+    hub.tasklists()
+        .delete(tasklist_id)
+        .doit()
+        .await
+        .context("タスクリスト削除に失敗")?;
+
+    println!("タスクリストを削除しました: {}", tasklist_id);
     Ok(())
 }
 

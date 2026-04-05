@@ -23,6 +23,20 @@ enum Commands {
     #[command(name = "lists")]
     ListTasklists,
 
+    /// タスクリストを作成
+    #[command(name = "lists-create")]
+    CreateTasklist {
+        /// タスクリスト名
+        title: String,
+    },
+
+    /// タスクリストを削除
+    #[command(name = "lists-delete")]
+    DeleteTasklist {
+        /// タスクリスト ID
+        tasklist_id: String,
+    },
+
     /// タスク一覧を表示
     List {
         /// タスクリスト ID（省略時はデフォルト）
@@ -105,6 +119,14 @@ async fn main() -> Result<()> {
         Commands::ListTasklists => {
             let hub = auth::build_hub().await?;
             commands::list_tasklists(&hub).await?;
+        }
+        Commands::CreateTasklist { title } => {
+            let hub = auth::build_hub().await?;
+            commands::create_tasklist(&hub, &title).await?;
+        }
+        Commands::DeleteTasklist { tasklist_id } => {
+            let hub = auth::build_hub().await?;
+            commands::delete_tasklist(&hub, &tasklist_id).await?;
         }
         Commands::List {
             tasklist,
