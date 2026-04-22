@@ -40,7 +40,7 @@ enum Commands {
     /// タスク一覧を表示
     List {
         /// タスクリスト ID（省略時はデフォルト）
-        #[arg(long)]
+        #[arg(long, conflicts_with = "all_lists")]
         tasklist: Option<String>,
         /// 期限フィルタ: "today", "YYYY-MM-DD", "YYYY-MM-DD..YYYY-MM-DD"
         #[arg(long)]
@@ -51,6 +51,9 @@ enum Commands {
         /// JSON 形式で出力する（スクリプト連携用）
         #[arg(long, default_value_t = false)]
         json: bool,
+        /// 全タスクリストを横断して取得する
+        #[arg(long, default_value_t = false)]
+        all_lists: bool,
     },
 
     /// タスクを作成
@@ -133,14 +136,27 @@ async fn main() -> Result<()> {
             due,
             show_completed,
             json,
+            all_lists,
         } => {
             let hub = auth::build_hub().await?;
             if json {
-                commands::list_tasks_json(&hub, tasklist.as_deref(), due.as_deref(), show_completed)
-                    .await?;
+                commands::list_tasks_json(
+                    &hub,
+                    tasklist.as_deref(),
+                    due.as_deref(),
+                    show_completed,
+                    all_lists,
+                )
+                .await?;
             } else {
-                commands::list_tasks(&hub, tasklist.as_deref(), due.as_deref(), show_completed)
-                    .await?;
+                commands::list_tasks(
+                    &hub,
+                    tasklist.as_deref(),
+                    due.as_deref(),
+                    show_completed,
+                    all_lists,
+                )
+                .await?;
             }
         }
         Commands::Create {
