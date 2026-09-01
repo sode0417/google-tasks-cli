@@ -19,6 +19,10 @@ enum Commands {
         json_file: String,
     },
 
+    /// トークンの状態を表示する（認証もネットワークアクセスも行わない）
+    #[command(name = "token-status")]
+    TokenStatus,
+
     /// タスクリスト一覧を表示
     #[command(name = "lists")]
     ListTasklists,
@@ -108,16 +112,36 @@ enum Commands {
     },
 }
 
+/// 終了コード:
+///   0 = 成功 / 1 = 一般的なエラー / 2 = 再認証が必要（リフレッシュに失敗し対話フローへ落ちた）
 #[tokio::main]
-async fn main() -> Result<()> {
+async fn main() {
+    if let Err(e) = run().await {
+        eprintln!("エラー: {:#}", e);
+        let code = if e.downcast_ref::<auth::ReauthRequired>().is_some() {
+            2
+        } else {
+            1
+        };
+        std::process::exit(code);
+    }
+}
+
+async fn run() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
         Commands::Auth { json_file } => {
             auth::import_secret(&json_file)?;
             println!("ブラウザで Google 認証を行います...");
-            let _hub = auth::build_hub().await?;
+            // 認証はブラウザでの操作を待つため、タイムアウトを掛けない版を使う
+            let _hub = auth::build_hub_interactive().await?;
             println!("認証が完了しました。");
+        }
+        Commands::TokenStatus => {
+            if !auth::print_token_status()? {
+                std::process::exit(1);
+            }
         }
         Commands::ListTasklists => {
             let hub = auth::build_hub().await?;
