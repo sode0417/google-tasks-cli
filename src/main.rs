@@ -116,7 +116,8 @@ async fn main() -> Result<()> {
         Commands::Auth { json_file } => {
             auth::import_secret(&json_file)?;
             println!("ブラウザで Google 認証を行います...");
-            let _hub = auth::build_hub().await?;
+            // 認証そのものが目的なので、端末かどうかに関わらずブラウザ認可を許可する
+            let _hub = auth::build_hub_with(auth::BrowserFlow::Allow).await?;
             println!("認証が完了しました。");
         }
         Commands::ListTasklists => {
