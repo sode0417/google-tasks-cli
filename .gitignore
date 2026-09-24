@@ -1,1 +1,6 @@
 /target
+
+# .env 派生（バックアップ含む）を除外（.env.example は配布物なので除外しない）
+.env
+.env.*
+!.env.example
