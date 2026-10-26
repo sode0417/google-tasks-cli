@@ -2,11 +2,16 @@ use crate::auth::TasksHub;
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
 use google_tasks1::api::{Task, TaskList};
+use std::collections::HashSet;
+
+/// tasks.list の1ページの件数（API の上限は 100、指定しないと 20）
+const TASKS_PAGE_SIZE: i32 = 100;
+/// tasklists.list の1ページの件数（API の上限は 1000）
+const TASKLISTS_PAGE_SIZE: i32 = 1000;
 
 /// タスクリスト一覧を表示
 pub async fn list_tasklists(hub: &TasksHub) -> Result<()> {
-    let (_, result) = hub.tasklists().list().doit().await.context("タスクリスト取得に失敗")?;
-    let lists = result.items.unwrap_or_default();
+    let lists = fetch_all_tasklists(hub).await?;
 
     if lists.is_empty() {
         println!("タスクリストがありません。");
@@ -67,31 +72,67 @@ async fn fetch_tasks(
     due: Option<&str>,
     show_completed: bool,
 ) -> Result<Vec<Task>> {
-    let mut call = hub
-        .tasks()
-        .list(list_id)
-        .show_completed(show_completed)
-        .show_hidden(show_completed);
+    let due_range = due.map(parse_due_filter).transpose()?;
+    // 各ページの async move に参照だけを持ち込むため、参照に束ね直す
+    let due_range = &due_range;
 
-    if let Some(due_str) = due {
-        let (min, max) = parse_due_filter(due_str)?;
-        call = call.due_min(&min);
-        call = call.due_max(&max);
-    }
+    collect_pages(|page_token| async move {
+        let mut call = hub
+            .tasks()
+            .list(list_id)
+            .show_completed(show_completed)
+            .show_hidden(show_completed)
+            .max_results(TASKS_PAGE_SIZE);
 
-    let (_, result) = call.doit().await.context("タスク取得に失敗")?;
-    Ok(result.items.unwrap_or_default())
+        if let Some((min, max)) = due_range {
+            call = call.due_min(min);
+            call = call.due_max(max);
+        }
+        if let Some(token) = &page_token {
+            call = call.page_token(token);
+        }
+
+        let (_, result) = call.doit().await.context("タスク取得に失敗")?;
+        Ok((result.items.unwrap_or_default(), result.next_page_token))
+    })
+    .await
 }
 
 /// 全タスクリストを取得
 async fn fetch_all_tasklists(hub: &TasksHub) -> Result<Vec<TaskList>> {
-    let (_, result) = hub
-        .tasklists()
-        .list()
-        .doit()
-        .await
-        .context("タスクリスト取得に失敗")?;
-    Ok(result.items.unwrap_or_default())
+    collect_pages(|page_token| async move {
+        let mut call = hub.tasklists().list().max_results(TASKLISTS_PAGE_SIZE);
+        if let Some(token) = &page_token {
+            call = call.page_token(token);
+        }
+        let (_, result) = call.doit().await.context("タスクリスト取得に失敗")?;
+        Ok((result.items.unwrap_or_default(), result.next_page_token))
+    })
+    .await
+}
+
+/// nextPageToken が返る限りページをたどり、全件を集める
+async fn collect_pages<T, F, Fut>(mut fetch_page: F) -> Result<Vec<T>>
+where
+    F: FnMut(Option<String>) -> Fut,
+    Fut: Future<Output = Result<(Vec<T>, Option<String>)>>,
+{
+    let mut all = Vec::new();
+    let mut seen_tokens = HashSet::new();
+    let mut page_token: Option<String> = None;
+    loop {
+        let (items, next) = fetch_page(page_token.clone()).await?;
+        all.extend(items);
+        match next {
+            Some(next) if !next.is_empty() => {
+                if !seen_tokens.insert(next.clone()) {
+                    anyhow::bail!("同じ nextPageToken が再び返ったため取得を中断しました");
+                }
+                page_token = Some(next);
+            }
+            _ => return Ok(all),
+        }
+    }
 }
 
 fn print_task(task: &Task) {
@@ -360,4 +401,83 @@ fn parse_due_filter(due_str: &str) -> Result<(String, String)> {
         format!("{}T00:00:00.000Z", start),
         format!("{}T00:00:00.000Z", end_exclusive),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    type Page = Result<(Vec<u32>, Option<String>)>;
+
+    /// ページの列を偽の API として返す（token はページ番号、最後のページだけ token なし）
+    fn fake_pages(pages: Vec<Vec<u32>>) -> impl FnMut(Option<String>) -> std::future::Ready<Page> {
+        move |token| {
+            let index = token.map_or(0, |t| t.parse::<usize>().unwrap());
+            let next = (index + 1 < pages.len()).then(|| (index + 1).to_string());
+            std::future::ready(Ok((pages[index].clone(), next)))
+        }
+    }
+
+    #[tokio::test]
+    async fn collects_all_pages() {
+        let pages = vec![
+            (0..100).collect(),
+            (100..200).collect(),
+            (200..261).collect(),
+        ];
+        let all = collect_pages(fake_pages(pages)).await.unwrap();
+        assert_eq!(all.len(), 261);
+        assert_eq!(all.first(), Some(&0));
+        assert_eq!(all.last(), Some(&260));
+    }
+
+    #[tokio::test]
+    async fn single_page_without_token() {
+        let all = collect_pages(fake_pages(vec![vec![1, 2, 3]]))
+            .await
+            .unwrap();
+        assert_eq!(all, vec![1, 2, 3]);
+    }
+
+    #[tokio::test]
+    async fn empty_token_ends_paging() {
+        let all = collect_pages(|_| std::future::ready(Ok((vec![7], Some(String::new())))))
+            .await
+            .unwrap();
+        assert_eq!(all, vec![7]);
+    }
+
+    #[tokio::test]
+    async fn repeated_token_is_an_error() {
+        let result =
+            collect_pages(|_| std::future::ready(Ok((vec![1], Some("same".to_string()))))).await;
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("nextPageToken"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn cycling_tokens_are_an_error() {
+        let result = collect_pages(|token| {
+            let next = match token.as_deref() {
+                None | Some("b") => "a",
+                Some(_) => "b",
+            };
+            std::future::ready(Ok((vec![1], Some(next.to_string()))))
+        })
+        .await;
+        let message = result.unwrap_err().to_string();
+        assert!(message.contains("nextPageToken"), "{message}");
+    }
+
+    #[tokio::test]
+    async fn error_on_later_page_is_returned() {
+        let result: Result<Vec<u32>> = collect_pages(|token| {
+            std::future::ready(match token {
+                None => Ok((vec![1], Some("2".to_string()))),
+                Some(_) => Err(anyhow::anyhow!("boom")),
+            })
+        })
+        .await;
+        assert!(result.is_err());
+    }
 }
